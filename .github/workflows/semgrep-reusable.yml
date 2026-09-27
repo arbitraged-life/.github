@@ -1,0 +1,31 @@
+name: '🔒 Semgrep Security SAST (reusable)'
+
+on:
+  workflow_call:
+    inputs:
+      strict:
+        description: 'Fail the build on security findings'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  semgrep:
+    name: 'Scan code for vulnerabilities'
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: 'Checkout repository'
+        uses: actions/checkout@v4
+
+      - name: 'Run Semgrep Security Scan'
+        run: |
+          if [ "${{ inputs.strict }}" = "true" ]; then
+            semgrep ci --config=p/security-audit --config=p/secrets --fail-on-severity=ERROR
+          else
+            semgrep ci --config=p/security-audit --config=p/secrets || true
+          fi
