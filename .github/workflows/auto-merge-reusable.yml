@@ -1,0 +1,101 @@
+name: Label Auto-Merge (reusable)
+
+# Squash-merges (default) open PRs carrying a label once a named gate workflow
+# passes on the PR head SHA, then deletes the branch. For private repos on
+# plans without repo-level auto-merge.
+#
+# The gate is the named workflow run only — third-party scanners stay advisory,
+# because they deny GITHUB_TOKEN read access to their check nodes.
+#
+# Callers declare their own triggers (schedule + workflow_run on the gate +
+# pull_request labeled/synchronize/reopened + workflow_dispatch) and grant at
+# least: contents:write, pull-requests:write, checks:read, actions:read.
+#
+# Minimal caller (.github/workflows/auto-merge.yml):
+#
+#   name: auto-merge
+#   "on":
+#     schedule:
+#       - cron: "0 * * * *"
+#     workflow_run:
+#       workflows: ["ci"]
+#       types: [completed]
+#     pull_request:
+#       types: [labeled, synchronize, reopened]
+#     workflow_dispatch:
+#   jobs:
+#     merge:
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#         checks: read
+#         actions: read
+#       uses: arbitraged-life/.github/.github/workflows/auto-merge-reusable.yml@main
+#       with:
+#         gate-workflow: ci.yml
+
+"on":
+  workflow_call:
+    inputs:
+      gate-workflow:
+        description: Gate workflow filename (e.g. ci.yml, vault-lint.yml)
+        type: string
+        required: true
+      label:
+        description: PR label that opts into auto-merge
+        type: string
+        default: auto-merge
+      merge-method:
+        description: Merge method passed to gh pr merge
+        type: string
+        default: squash
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Merge labeled PRs with green gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set +e
+          echo "listing PRs labeled '${{ inputs.label }}'…"
+          prs=$(gh pr list --state open --label "${{ inputs.label }}" --json number --jq '.[].number')
+          echo "list rc=$? prs=[$prs]"
+          [ -z "$prs" ] && { echo "no labeled PRs"; exit 0; }
+          for pr in $prs; do
+            mg=""
+            for i in $(seq 1 30); do
+              mg=$(gh pr view "$pr" --json mergeable --jq .mergeable)
+              [ "$mg" = "MERGEABLE" ] && break
+              echo "PR #$pr mergeable=$mg, waiting ($i/30)"
+              sleep 10
+            done
+            if [ "$mg" != "MERGEABLE" ]; then
+              echo "PR #$pr never became mergeable, skipping"
+              continue
+            fi
+            sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+            st="pending/pending"
+            for i in $(seq 1 60); do
+              st=$(gh run list --commit "$sha" --workflow "${{ inputs.gate-workflow }}" --json status,conclusion --jq '((.[0] // {status:"pending", conclusion:"pending"}) | "\(.status)/\(.conclusion)")')
+              case "$st" in
+                completed/success) break ;;
+                completed/*) break ;;
+                *) echo "PR #$pr gate: $st ($i/60)"; sleep 10 ;;
+              esac
+            done
+            if [ "$st" = "completed/success" ]; then
+              gh pr merge "$pr" --${{ inputs.merge-method }} --delete-branch && echo "merged PR #$pr"
+            else
+              echo "PR #$pr gate not green ($st), skipping"
+            fi
+          done
