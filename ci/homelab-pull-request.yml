@@ -2,23 +2,11 @@
 # see handoff prerequisites. This file never consumes custom webhook metadata.
 version: 2.1
 
-jobs:
-  pr-head-preflight:
-    # Checkout supplies CircleCI's read-only Git credential; only trusted-main
-    # commands run here, never code from the checked-out pull request.
-    docker:
-      - image: node:22.18.0-bookworm
-    resource_class: small
-    environment:
-      PR_NUMBER: << pipeline.event.github.pull_request.number >>
-      PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
-      PR_BASE_REF: << pipeline.event.github.pull_request.base.ref >>
-      PIPELINE_REVISION: << pipeline.git.revision >>
-      CONFIG_REF: << pipeline.config.ref >>
+commands:
+  verify-live-pr-head:
     steps:
-      - checkout
       - run:
-          name: Verify live pull request head
+          name: Verify trusted config and live pull request head
           command: |
             set -euo pipefail
             [[ "$CONFIG_REF" == "refs/heads/main" ]] || {
@@ -44,6 +32,38 @@ jobs:
             }
             echo "Verified live GitHub PR #$PR_NUMBER head $PR_HEAD_SHA"
 
+  assert-pr-checkout:
+    steps:
+      - run:
+          name: Assert event head matches checkout
+          command: |
+            set -euo pipefail
+            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            [[ "$PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
+            checkout_sha="$(git rev-parse HEAD)"
+            [[ "$checkout_sha" == "$PR_HEAD_SHA" ]] || {
+              echo "PR event head $PR_HEAD_SHA does not match checkout $checkout_sha" >&2
+              exit 1
+            }
+            echo "Verified PR #$PR_NUMBER checkout at $checkout_sha"
+
+jobs:
+  pr-head-preflight:
+    # Checkout supplies CircleCI's read-only Git credential; only trusted-main
+    # commands run here, never code from the checked-out pull request.
+    docker:
+      - image: node:22.18.0-bookworm
+    resource_class: small
+    environment:
+      PR_NUMBER: << pipeline.event.github.pull_request.number >>
+      PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      PR_BASE_REF: << pipeline.event.github.pull_request.base.ref >>
+      PIPELINE_REVISION: << pipeline.git.revision >>
+      CONFIG_REF: << pipeline.config.ref >>
+    steps:
+      - checkout
+      - verify-live-pr-head
+
   pr-head-postflight:
     # Repeat the live-head check after all checkout jobs, so a push while
     # expensive scans are running leaves a failing native status check.
@@ -58,32 +78,7 @@ jobs:
       CONFIG_REF: << pipeline.config.ref >>
     steps:
       - checkout
-      - run:
-          name: Verify trusted config source and current pull request head
-          command: |
-            set -euo pipefail
-            [[ "$CONFIG_REF" == "refs/heads/main" ]] || {
-              echo "CircleCI config must come from refs/heads/main; got $CONFIG_REF" >&2
-              exit 1
-            }
-            [[ "$PR_BASE_REF" == main ]]
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-            [[ "$PIPELINE_REVISION" == "$PR_HEAD_SHA" ]] || {
-              echo "Pipeline revision $PIPELINE_REVISION does not match PR event head $PR_HEAD_SHA" >&2
-              exit 1
-            }
-            checkout_sha="$(git rev-parse HEAD)"
-            [[ "$checkout_sha" == "$PR_HEAD_SHA" ]] || {
-              echo "Checkout $checkout_sha does not match PR event head $PR_HEAD_SHA" >&2
-              exit 1
-            }
-            live_head_sha="$(git ls-remote origin "refs/pull/$PR_NUMBER/head" | cut -f1)"
-            [[ "$live_head_sha" == "$PR_HEAD_SHA" ]] || {
-              echo "Live PR #$PR_NUMBER head $live_head_sha does not match event $PR_HEAD_SHA" >&2
-              exit 1
-            }
-            echo "Verified live GitHub PR #$PR_NUMBER head $PR_HEAD_SHA after checks"
+      - verify-live-pr-head
 
   verify-pr:
     docker:
@@ -94,18 +89,7 @@ jobs:
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
     steps:
       - checkout
-      - run:
-          name: Assert event head matches checkout
-          command: |
-            set -euo pipefail
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-            checkout_sha="$(git rev-parse HEAD)"
-            [[ "$checkout_sha" == "$PR_HEAD_SHA" ]] || {
-              echo "PR event head $PR_HEAD_SHA does not match checkout $checkout_sha" >&2
-              exit 1
-            }
-            echo "Verified PR #$PR_NUMBER checkout at $checkout_sha"
+      - assert-pr-checkout
       - run:
           name: Install Verify dependencies
           command: |
@@ -158,18 +142,7 @@ jobs:
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
     steps:
       - checkout
-      - run:
-          name: Assert event head matches checkout
-          command: |
-            set -euo pipefail
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-            checkout_sha="$(git rev-parse HEAD)"
-            [[ "$checkout_sha" == "$PR_HEAD_SHA" ]] || {
-              echo "PR event head $PR_HEAD_SHA does not match checkout $checkout_sha" >&2
-              exit 1
-            }
-            echo "Verified PR #$PR_NUMBER checkout at $checkout_sha"
+      - assert-pr-checkout
       - run:
           name: Install hook-parity dependencies
           command: |
@@ -194,9 +167,6 @@ jobs:
       - run:
           name: Config and YAML structure audit
           command: git ls-files '*.yaml' '*.yml' | xargs -r python3 _config/git-hooks/src/config-validator.py
-      - run:
-          name: Filesystem layout naming
-          command: npx --yes @ls-lint/ls-lint@2.3.1
       - run:
           name: Bypass auditor
           command: python3 _config/git-hooks/src/bypass-auditor.py --all
@@ -300,17 +270,7 @@ jobs:
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
     steps:
       - checkout
-      - run:
-          name: Assert event head matches checkout
-          command: |
-            set -euo pipefail
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-            checkout_sha="$(git rev-parse HEAD)"
-            [[ "$checkout_sha" == "$PR_HEAD_SHA" ]] || {
-              echo "PR event head $PR_HEAD_SHA does not match checkout $checkout_sha" >&2
-              exit 1
-            }
+      - assert-pr-checkout
       - run:
           name: Install automation check dependencies
           command: |
@@ -350,17 +310,7 @@ jobs:
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
     steps:
       - checkout
-      - run:
-          name: Assert event head matches checkout
-          command: |
-            set -euo pipefail
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-            checkout_sha="$(git rev-parse HEAD)"
-            [[ "$checkout_sha" == "$PR_HEAD_SHA" ]] || {
-              echo "PR event head $PR_HEAD_SHA does not match checkout $checkout_sha" >&2
-              exit 1
-            }
+      - assert-pr-checkout
       - run:
           name: Install chezmoi 2.73.0
           command: |
@@ -386,17 +336,7 @@ jobs:
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
     steps:
       - checkout
-      - run:
-          name: Assert event head matches checkout
-          command: |
-            set -euo pipefail
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-            checkout_sha="$(git rev-parse HEAD)"
-            [[ "$checkout_sha" == "$PR_HEAD_SHA" ]] || {
-              echo "PR event head $PR_HEAD_SHA does not match checkout $checkout_sha" >&2
-              exit 1
-            }
+      - assert-pr-checkout
       - run:
           name: Filesystem layout naming parity
           command: npm exec --yes --package=@ls-lint/ls-lint@2.3.1 -- ls-lint
@@ -410,17 +350,7 @@ jobs:
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
     steps:
       - checkout
-      - run:
-          name: Assert event head matches checkout
-          command: |
-            set -euo pipefail
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-            checkout_sha="$(git rev-parse HEAD)"
-            [[ "$checkout_sha" == "$PR_HEAD_SHA" ]] || {
-              echo "PR event head $PR_HEAD_SHA does not match checkout $checkout_sha" >&2
-              exit 1
-            }
+      - assert-pr-checkout
       - run:
           name: Install typos 1.28.3
           command: |
