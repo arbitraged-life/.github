@@ -12,9 +12,13 @@ Each workflow validates the event, checkout SHA, and live PR ref before and
 after its checks. Before running PR code, its preflight refuses changes to
 security verifier scripts, their policy files, or shipped skillspector
 baselines relative to the PR's trusted base. Land intentional security-policy
-changes separately, review them on `main`, then rebase the feature PR. The
-Gitleaks job loads its rules from the trusted base commit, ignores PR-supplied
-Gitleaks configuration/ignore files, and scans the PR commit range.
+changes separately, review them on `main`, then rebase the feature PR.
+Homelab runs policy auditors before installing Node packages without lifecycle
+scripts; its router security regressions come from the trusted base and run
+against the PR implementation before PR-authored tests. Agent-framework runs
+its protected purity checker before PR-authored pytest modules can modify the
+working tree. Gitleaks loads its rules from the trusted base commit, ignores
+PR-supplied configuration/ignore files, and scans the PR commit range.
 
 No write token, self-hosted Actions runner, merge controller, or privileged
 remediation belongs in these untrusted-PR jobs. Confirm the CircleCI Checks

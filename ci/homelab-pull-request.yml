@@ -115,6 +115,7 @@ jobs:
     environment:
       PR_NUMBER: << pipeline.event.github.pull_request.number >>
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      PR_BASE_SHA: << pipeline.event.github.pull_request.base.sha >>
       PYTHONSAFEPATH: "1"
     steps:
       - checkout
@@ -127,15 +128,7 @@ jobs:
             apt-get install -y -qq python3 python3-venv zsh shellcheck curl ca-certificates jq
             python3 -m venv /tmp/ci-venv
             echo 'export PATH=/tmp/ci-venv/bin:$PATH' >> "$BASH_ENV"
-            pin="$(grep -iE '^PyYAML==' requirements/requirements.txt)"
-            test -n "$pin"
-            /tmp/ci-venv/bin/pip install --quiet --disable-pip-version-check "$pin"
-      - run:
-          name: Install Node dependencies
-          command: npm ci
-      - run:
-          name: Run repository tests
-          command: npm test
+            /tmp/ci-venv/bin/pip install --quiet --disable-pip-version-check PyYAML==6.0.3
       - run:
           name: Compile tracked Python
           command: git ls-files '*.py' | xargs -r -n1 python3 -m py_compile
@@ -161,6 +154,25 @@ jobs:
           command: |
             python3 -I infra/cloudflare/ci-router/audit-routing.py
             python3 -I infra/cloudflare/ci-router/render-checks.py --check
+      - run:
+          name: Install Node dependencies without PR lifecycle scripts
+          command: npm ci --ignore-scripts
+      - run:
+          name: Run trusted-base router security regressions against PR code
+          command: |
+            set -euo pipefail
+            [[ "$PR_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+            git fetch --no-tags origin "$PR_BASE_SHA"
+            git cat-file -e "$PR_BASE_SHA^{commit}"
+            trusted_tests="$(mktemp -d /tmp/ci-trusted-tests.XXXXXX)"
+            trap 'rm -rf "$trusted_tests"' EXIT
+            mkdir -p "$trusted_tests/tests/unit"
+            git show "$PR_BASE_SHA:tests/unit/ci-router.test.mjs" > "$trusted_tests/tests/unit/ci-router.test.mjs"
+            ln -s "$PWD/infra" "$trusted_tests/infra"
+            node --test "$trusted_tests/tests/unit/ci-router.test.mjs"
+      - run:
+          name: Run repository tests
+          command: node --test "tests/**/*.test.*"
 
   hook-parity-pr:
     docker:
@@ -181,9 +193,7 @@ jobs:
             apt-get install -y -qq python3 python3-venv zsh shellcheck curl ca-certificates jq
             python3 -m venv /tmp/ci-venv
             echo 'export PATH=/tmp/ci-venv/bin:$PATH' >> "$BASH_ENV"
-            pin="$(grep -iE '^PyYAML==' requirements/requirements.txt)"
-            test -n "$pin"
-            /tmp/ci-venv/bin/pip install --quiet --disable-pip-version-check "$pin"
+            /tmp/ci-venv/bin/pip install --quiet --disable-pip-version-check PyYAML==6.0.3
       - run:
           name: Git hook entrypoint syntax
           command: |

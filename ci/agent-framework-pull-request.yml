@@ -144,6 +144,9 @@ jobs:
           name: Verify security checkout matches event head
           command: test "$(git rev-parse HEAD)" = "$CIRCLECI_PR_HEAD_SHA"
       - run:
+          name: Verify harness purity before PR test code executes
+          command: python3 -I tests/test_harness_purity.py
+      - run:
           name: Install Python audit and test prerequisites
           command: |
             python3 -m venv /tmp/ci-venv
@@ -186,9 +189,6 @@ jobs:
             done
             python -c 'import redis; assert redis.Redis(host="localhost", port=6379).ping()'
             PYTHONPATH=lib/agent-bus pytest -q lib/agent-bus/tests/test_client.py
-      - run:
-          name: Verify harness purity
-          command: python3 tests/test_harness_purity.py
       - run:
           name: Audit shell script syntax
           command: git ls-files '*.sh' | xargs -r -n1 bash -n
