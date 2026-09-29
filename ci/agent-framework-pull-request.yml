@@ -82,7 +82,7 @@ commands:
 jobs:
   verify-native-pr-head:
     docker:
-      - image: cimg/node:22.19.0
+      - image: cimg/node:24.15.0
     resource_class: small
     environment:
       CIRCLECI_TRIGGER_TYPE: << pipeline.trigger.type >>
@@ -99,7 +99,7 @@ jobs:
 
   verify-native-pr-head-current:
     docker:
-      - image: cimg/node:22.19.0
+      - image: cimg/node:24.15.0
     resource_class: small
     environment:
       CIRCLECI_TRIGGER_TYPE: << pipeline.trigger.type >>
@@ -114,7 +114,7 @@ jobs:
 
   framework-pr-regression:
     docker:
-      - image: cimg/node:22.19.0
+      - image: cimg/node:24.15.0
     resource_class: medium
     environment:
       CIRCLECI_PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
@@ -152,7 +152,7 @@ jobs:
             python3 -m venv /tmp/ci-venv
             echo 'export PATH=/tmp/ci-venv/bin:$PATH' >> "$BASH_ENV"
             source "$BASH_ENV"
-            python -m pip install --quiet 'pytest==9.1.1' 'pytest-asyncio==1.4.0' 'redis==8.1.0'
+            python -m pip install --quiet 'pytest==9.1.1' 'pytest-asyncio==1.4.0' 'redis==8.1.0' 'PyYAML==6.0.3'
       - run:
           name: Verify skill routing policy
           command: ./scripts/skills/verify-skill-routing.sh --all
