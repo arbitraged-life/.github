@@ -17,7 +17,9 @@ Homelab runs policy auditors before installing Node packages without lifecycle
 scripts; its router security regressions come from the trusted base and run
 against the PR implementation before PR-authored tests. Agent-framework runs
 its protected purity checker before PR-authored pytest modules can modify the
-working tree. Gitleaks loads its rules from the trusted base commit; preflight
+working tree. The framework security image uses Python 3.12 because pinned
+Skillspector v2.9.6 requires Python 3.12 or newer. Gitleaks loads its rules
+from the trusted base commit; preflight
 rejects changes to the root `.gitleaksignore` because Gitleaks also reads that
 file from the scan source. Inline `gitleaks:allow` directives are disabled, and
 the scanner covers the PR commit range.
