@@ -239,9 +239,9 @@ class MergeGatePolicyTests(unittest.TestCase):
                 "external_id": f"{PIPELINE_CI}:{WORKFLOW_CI}:attempt-3:pr-42:{CORRELATION_CI}",
             }]},
         ]
-        with patch.object(merge_gate, "_gh_json", side_effect=pages) as request:
+        with patch.object(merge_gate, "_gh_json", side_effect=pages * 2) as request:
             checks = merge_gate._get_provider_checks("owner/repo", SHA)
-        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_count, 4)
         result = merge_gate.evaluate_evidence(
             head_sha=SHA, pr_number=PR_NUMBER, required_actions=[], advisory_actions=[],
             action_runs=[], provider_enabled=True, trusted_publisher_app_id=APP_ID,
@@ -254,6 +254,22 @@ class MergeGatePolicyTests(unittest.TestCase):
         pages = [
             {"total_count": 101, "check_runs": [{"name": "unrelated"}] * 100},
             {"total_count": 102, "check_runs": [{"name": "CircleCI / ci"}]},
+        ]
+        with patch.object(merge_gate, "_gh_json", side_effect=pages):
+            with self.assertRaisesRegex(ValueError, "changed"):
+                merge_gate._get_provider_checks("owner/repo", SHA)
+
+    def test_provider_check_pagination_rejects_same_count_page_replacement(self):
+        success = {
+            "name": "CircleCI / ci", "head_sha": SHA, "app": {"id": APP_ID},
+            "status": "completed", "conclusion": "success",
+            "external_id": f"{PIPELINE_CI}:{WORKFLOW_CI}:attempt-3:pr-42:{CORRELATION_CI}",
+        }
+        pages = [
+            {"total_count": 101, "check_runs": [success] + [{"name": "unrelated"}] * 99},
+            {"total_count": 101, "check_runs": [{"name": "other"}]},
+            {"total_count": 101, "check_runs": [success, {**success, "conclusion": "failure"}] + [{"name": "unrelated"}] * 98},
+            {"total_count": 101, "check_runs": [{"name": "other"}]},
         ]
         with patch.object(merge_gate, "_gh_json", side_effect=pages):
             with self.assertRaisesRegex(ValueError, "changed"):
