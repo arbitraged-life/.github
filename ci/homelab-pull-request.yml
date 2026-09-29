@@ -65,6 +65,7 @@ commands:
               infra/cloudflare/ci-router/workflow-routing.json
               _config/git-hooks/
               governance/config/purity-bypass-rules.json
+              .gitleaksignore
             )
             if ! git diff --quiet "$PR_BASE_SHA" "$PR_HEAD_SHA" -- "${policy_paths[@]}"; then
               echo 'Security gate policy changed in the pull request; review and land policy separately before this PR can pass.' >&2
