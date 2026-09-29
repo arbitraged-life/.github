@@ -156,19 +156,28 @@ def _get_action_runs(repo: str, workflow: str, sha: str) -> list[dict[str, Any]]
     ]
 
 
-def complete_check_run_page(data: dict[str, Any]) -> list[dict[str, Any]]:
-    checks = data.get("check_runs")
-    total_count = data.get("total_count")
-    if not isinstance(checks, list) or type(total_count) is not int or total_count < 0:
-        raise ValueError("invalid GitHub check-run page response")
-    if total_count > len(checks):
-        raise ValueError("truncated GitHub check-run page; refusing incomplete provider evidence")
-    if total_count != len(checks):
-        raise ValueError("inconsistent GitHub check-run count; refusing provider evidence")
-    return checks
-
 def _get_provider_checks(repo: str, sha: str) -> list[dict[str, Any]]:
-    data = _gh_json(f"repos/{repo}/commits/{sha}/check-runs?filter=all&per_page=100")
+    checks: list[dict[str, Any]] = []
+    expected_count: int | None = None
+    for page in range(1, 11):
+        data = _gh_json(f"repos/{repo}/commits/{sha}/check-runs?filter=all&per_page=100&page={page}")
+        rows = data.get("check_runs")
+        total = data.get("total_count")
+        if not isinstance(rows, list) or type(total) is not int or total < 0 or len(rows) > 100:
+            raise ValueError("invalid GitHub check-run page response")
+        if total > 1000:
+            raise ValueError("provider check count exceeds the bounded 1000-check scan")
+        if expected_count is None:
+            expected_count = total
+        if total != expected_count or len(checks) + len(rows) > total:
+            raise ValueError("provider check result changed while paging; retry a fresh pass")
+        checks.extend(rows)
+        if len(checks) == total:
+            break
+        if len(rows) != 100:
+            raise ValueError("truncated GitHub check-run page; refusing incomplete provider evidence")
+    else:
+        raise ValueError("provider check result exceeds the bounded page scan")
     return [
         {
             "name": check.get("name"),
@@ -178,7 +187,7 @@ def _get_provider_checks(repo: str, sha: str) -> list[dict[str, Any]]:
             "conclusion": check.get("conclusion"),
             "external_id": check.get("external_id"),
         }
-        for check in complete_check_run_page(data)
+        for check in checks
     ]
 
 

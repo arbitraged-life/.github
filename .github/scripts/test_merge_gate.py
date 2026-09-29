@@ -3,6 +3,7 @@
 
 import unittest
 
+from unittest.mock import patch
 import merge_gate
 
 SHA = "a" * 40
@@ -224,9 +225,45 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("configuration", result.reason)
 
     def test_truncated_provider_check_page_is_rejected(self):
-        response = {"total_count": 101, "check_runs": [{}] * 100}
-        with self.assertRaisesRegex(ValueError, "truncated"):
-            merge_gate.complete_check_run_page(response)
+        response = {"total_count": 101, "check_runs": [{}] * 50}
+        with patch.object(merge_gate, "_gh_json", return_value=response):
+            with self.assertRaisesRegex(ValueError, "truncated"):
+                merge_gate._get_provider_checks("owner/repo", SHA)
+
+    def test_provider_checks_include_every_page_before_allowing_a_required_check(self):
+        pages = [
+            {"total_count": 101, "check_runs": [{"name": "unrelated"}] * 100},
+            {"total_count": 101, "check_runs": [{
+                "name": "CircleCI / ci", "head_sha": SHA, "app": {"id": APP_ID},
+                "status": "completed", "conclusion": "failure",
+                "external_id": f"{PIPELINE_CI}:{WORKFLOW_CI}:attempt-3:pr-42:{CORRELATION_CI}",
+            }]},
+        ]
+        with patch.object(merge_gate, "_gh_json", side_effect=pages) as request:
+            checks = merge_gate._get_provider_checks("owner/repo", SHA)
+        self.assertEqual(request.call_count, 2)
+        result = merge_gate.evaluate_evidence(
+            head_sha=SHA, pr_number=PR_NUMBER, required_actions=[], advisory_actions=[],
+            action_runs=[], provider_enabled=True, trusted_publisher_app_id=APP_ID,
+            required_provider_workflows=["ci"], provider_checks=checks,
+        )
+        self.assertFalse(result.allowed)
+        self.assertIn("failure", result.reason)
+
+    def test_provider_check_pagination_rejects_changed_snapshot(self):
+        pages = [
+            {"total_count": 101, "check_runs": [{"name": "unrelated"}] * 100},
+            {"total_count": 102, "check_runs": [{"name": "CircleCI / ci"}]},
+        ]
+        with patch.object(merge_gate, "_gh_json", side_effect=pages):
+            with self.assertRaisesRegex(ValueError, "changed"):
+                merge_gate._get_provider_checks("owner/repo", SHA)
+
+    def test_provider_check_pagination_rejects_over_bound_instead_of_skipping_checks(self):
+        with patch.object(merge_gate, "_gh_json", return_value={"total_count": 1001, "check_runs": [{}] * 100}) as request:
+            with self.assertRaisesRegex(ValueError, "bound"):
+                merge_gate._get_provider_checks("owner/repo", SHA)
+        request.assert_called_once()
 
 
 if __name__ == "__main__":
