@@ -1,0 +1,140 @@
+version: 2.1
+
+jobs:
+  verify-native-pr-head:
+    docker:
+      - image: cimg/node:22.19.0
+    resource_class: small
+    environment:
+      CIRCLECI_TRIGGER_TYPE: << pipeline.trigger.type >>
+      CIRCLECI_CONFIG_REF: << pipeline.config.ref >>
+      CIRCLECI_PIPELINE_GIT_REVISION: << pipeline.git.revision >>
+      CIRCLECI_PR_NUMBER: << pipeline.event.github.pull_request.number >>
+      CIRCLECI_PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      CIRCLECI_PR_BASE_REF: << pipeline.event.github.pull_request.base.ref >>
+    steps:
+      - checkout
+      - run:
+          name: Verify GitHub App pull request head
+          command: |
+            set -euo pipefail
+
+            [[ "$CIRCLECI_TRIGGER_TYPE" == github_app ]] || {
+              echo 'This workflow requires a native CircleCI GitHub App trigger' >&2
+              exit 2
+            }
+            [[ "$CIRCLECI_CONFIG_REF" == refs/heads/main ]] || {
+              echo 'CircleCI config must be loaded from trusted main' >&2
+              exit 2
+            }
+            [[ "$CIRCLECI_PIPELINE_GIT_REVISION" =~ ^[a-f0-9]{40}$ ]] || {
+              echo 'Invalid CircleCI pipeline Git revision' >&2
+              exit 2
+            }
+            [[ "$CIRCLECI_PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+              echo 'Invalid GitHub App pull request number' >&2
+              exit 2
+            }
+            [[ "$CIRCLECI_PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || {
+              echo 'Invalid GitHub App pull request head SHA' >&2
+              exit 2
+            }
+            [[ "$CIRCLECI_PR_BASE_REF" == main ]] || {
+              echo 'This check only validates pull requests targeting main' >&2
+              exit 2
+            }
+
+            checkout_sha="$(git rev-parse HEAD)"
+            [[ "$checkout_sha" == "$CIRCLECI_PIPELINE_GIT_REVISION" ]] || {
+              printf 'Pipeline revision mismatch: pipeline=%s checkout=%s\n' \
+                "$CIRCLECI_PIPELINE_GIT_REVISION" "$checkout_sha" >&2
+              exit 2
+            }
+            [[ "$checkout_sha" == "$CIRCLECI_PR_HEAD_SHA" ]] || {
+              printf 'Checkout SHA mismatch: event=%s checkout=%s\n' \
+                "$CIRCLECI_PR_HEAD_SHA" "$checkout_sha" >&2
+              exit 2
+            }
+
+            live_head_sha="$(git ls-remote origin "refs/pull/${CIRCLECI_PR_NUMBER}/head" | cut -f1)"
+            [[ "$live_head_sha" =~ ^[a-f0-9]{40}$ ]] || {
+              echo 'Could not resolve the current GitHub pull request head' >&2
+              exit 2
+            }
+            [[ "$live_head_sha" == "$CIRCLECI_PR_HEAD_SHA" ]] || {
+              printf 'Stale pull request event: event=%s current=%s\n' \
+                "$CIRCLECI_PR_HEAD_SHA" "$live_head_sha" >&2
+              exit 2
+            }
+
+            printf 'Verified PR #%s at exact head %s\n' \
+              "$CIRCLECI_PR_NUMBER" "$CIRCLECI_PR_HEAD_SHA"
+
+  framework-pr-regression:
+    docker:
+      - image: cimg/node:22.19.0
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: Install locked Node dependencies
+          command: npm ci
+      - run:
+          name: Run framework unit and review-remediation regressions
+          command: npm test
+
+  framework-pr-security-audit:
+    docker:
+      - image: cimg/python:3.11
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: Install Python audit and test prerequisites
+          command: |
+            python3 -m venv /tmp/ci-venv
+            echo 'export PATH=/tmp/ci-venv/bin:$PATH' >> "$BASH_ENV"
+            source "$BASH_ENV"
+            python -m pip install --quiet pytest pytest-asyncio redis
+      - run:
+          name: Verify skill routing policy
+          command: ./scripts/skills/verify-skill-routing.sh --all
+      - run:
+          name: Audit all skills with pinned skillspector
+          command: ./scripts/skills/verify-skill-security.sh --all
+      - run:
+          name: Compile all tracked Python
+          command: |
+            status=0
+            while IFS= read -r file; do
+              python -c 'import sys; path=sys.argv[1]; compile(open(path, encoding="utf-8").read(), path, "exec")' "$file" || status=1
+            done < <(git ls-files "*.py")
+            exit "$status"
+      - run:
+          name: Run Python unit tests
+          command: |
+            PYTHONPATH=lib/agent-bus pytest -q \
+              lib/agent-bus/tests/test_hermes_plugin.py \
+              lib/agent-bus/tests/test_message.py \
+              tests/test_verify_purity.py
+      - run:
+          name: Run Redis-dependent integration tests
+          command: PYTHONPATH=lib/agent-bus pytest -q lib/agent-bus/tests/test_client.py || true
+      - run:
+          name: Verify harness purity
+          command: python3 tests/test_harness_purity.py
+      - run:
+          name: Audit shell script syntax
+          command: git ls-files '*.sh' | xargs -r -n1 bash -n
+
+workflows:
+  agent-framework-native-pr-checks:
+    when: pipeline.event.name == "pull_request"
+    jobs:
+      - verify-native-pr-head
+      - framework-pr-regression:
+          requires:
+            - verify-native-pr-head
+      - framework-pr-security-audit:
+          requires:
+            - verify-native-pr-head
