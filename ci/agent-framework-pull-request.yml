@@ -124,6 +124,15 @@ jobs:
           name: Verify regression checkout matches event head
           command: test "$(git rev-parse HEAD)" = "$CIRCLECI_PR_HEAD_SHA"
       - run:
+          name: Install skill metadata test prerequisites
+          command: |
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq python3-venv
+            python3 -m venv /tmp/node-test-venv
+            echo 'export PATH=/tmp/node-test-venv/bin:$PATH' >> "$BASH_ENV"
+            source "$BASH_ENV"
+            python -m pip install --quiet 'PyYAML==6.0.3'
+      - run:
           name: Install locked Node dependencies
           command: npm ci
       - run:
