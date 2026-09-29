@@ -47,6 +47,32 @@ commands:
             }
             echo "Verified PR #$PR_NUMBER checkout at $checkout_sha"
 
+  verify-policy-integrity:
+    steps:
+      - run:
+          name: Refuse pull request changes to security gate policy
+          command: |
+            set -euo pipefail
+            [[ "$PR_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+            [[ "$PR_BASE_SHA" != "$PR_HEAD_SHA" ]]
+            git fetch --no-tags origin "$PR_BASE_SHA"
+            git cat-file -e "$PR_BASE_SHA^{commit}"
+            policy_paths=(
+              scripts/check_repo_shape.py
+              infra/cloudflare/ci-router/audit-routing.py
+              infra/cloudflare/ci-router/render-checks.py
+              infra/cloudflare/ci-router/path-filter.py
+              infra/cloudflare/ci-router/workflow-routing.json
+              _config/git-hooks/
+              governance/config/purity-bypass-rules.json
+            )
+            if ! git diff --quiet "$PR_BASE_SHA" "$PR_HEAD_SHA" -- "${policy_paths[@]}"; then
+              echo 'Security gate policy changed in the pull request; review and land policy separately before this PR can pass.' >&2
+              git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" -- "${policy_paths[@]}" >&2
+              exit 1
+            fi
+            echo 'PR security gate policy matches trusted base.'
+
 jobs:
   pr-head-preflight:
     # Checkout supplies CircleCI's read-only Git credential; only trusted-main
@@ -57,12 +83,14 @@ jobs:
     environment:
       PR_NUMBER: << pipeline.event.github.pull_request.number >>
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      PR_BASE_SHA: << pipeline.event.github.pull_request.base.sha >>
       PR_BASE_REF: << pipeline.event.github.pull_request.base.ref >>
       PIPELINE_REVISION: << pipeline.git.revision >>
       CONFIG_REF: << pipeline.config.ref >>
     steps:
       - checkout
       - verify-live-pr-head
+      - verify-policy-integrity
 
   pr-head-postflight:
     # Repeat the live-head check after all checkout jobs, so a push while
@@ -87,6 +115,7 @@ jobs:
     environment:
       PR_NUMBER: << pipeline.event.github.pull_request.number >>
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      PYTHONSAFEPATH: "1"
     steps:
       - checkout
       - assert-pr-checkout
@@ -126,12 +155,12 @@ jobs:
             exit "$fail"
       - run:
           name: Check repository shape
-          command: python3 scripts/check_repo_shape.py
+          command: python3 -I scripts/check_repo_shape.py
       - run:
           name: Verify routing and adapter parity
           command: |
-            python3 infra/cloudflare/ci-router/audit-routing.py
-            python3 infra/cloudflare/ci-router/render-checks.py --check
+            python3 -I infra/cloudflare/ci-router/audit-routing.py
+            python3 -I infra/cloudflare/ci-router/render-checks.py --check
 
   hook-parity-pr:
     docker:
@@ -140,6 +169,7 @@ jobs:
     environment:
       PR_NUMBER: << pipeline.event.github.pull_request.number >>
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      PYTHONSAFEPATH: "1"
     steps:
       - checkout
       - assert-pr-checkout
@@ -166,10 +196,10 @@ jobs:
           command: bash _config/git-hooks/src/doc-purity-lint.sh
       - run:
           name: Config and YAML structure audit
-          command: git ls-files '*.yaml' '*.yml' | xargs -r python3 _config/git-hooks/src/config-validator.py
+          command: git ls-files '*.yaml' '*.yml' | xargs -r python3 -I _config/git-hooks/src/config-validator.py
       - run:
           name: Bypass auditor
-          command: python3 _config/git-hooks/src/bypass-auditor.py --all
+          command: python3 -I _config/git-hooks/src/bypass-auditor.py --all
 
   trufflehog-pr:
     docker:
@@ -259,7 +289,13 @@ jobs:
             tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
       - run:
           name: Gitleaks pull-request commit scan
-          command: /tmp/gitleaks git . --redact --no-banner --log-opts "$PR_BASE_SHA..$PR_HEAD_SHA"
+          command: |
+            set -euo pipefail
+            git show "$PR_BASE_SHA:_config/gitleaks.toml" > /tmp/ci-gitleaks.toml
+            : > /tmp/ci-gitleaks-ignore
+            /tmp/gitleaks git . --redact --no-banner --config /tmp/ci-gitleaks.toml \
+              --gitleaks-ignore-path /tmp/ci-gitleaks-ignore --ignore-gitleaks-allow \
+              --log-opts "$PR_BASE_SHA..$PR_HEAD_SHA"
 
   automation-pr:
     docker:
@@ -268,6 +304,7 @@ jobs:
     environment:
       PR_NUMBER: << pipeline.event.github.pull_request.number >>
       PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      PYTHONSAFEPATH: "1"
     steps:
       - checkout
       - assert-pr-checkout

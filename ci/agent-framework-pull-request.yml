@@ -1,24 +1,12 @@
 version: 2.1
 
-jobs:
-  verify-native-pr-head:
-    docker:
-      - image: cimg/node:22.19.0
-    resource_class: small
-    environment:
-      CIRCLECI_TRIGGER_TYPE: << pipeline.trigger.type >>
-      CIRCLECI_CONFIG_REF: << pipeline.config.ref >>
-      CIRCLECI_PIPELINE_GIT_REVISION: << pipeline.git.revision >>
-      CIRCLECI_PR_NUMBER: << pipeline.event.github.pull_request.number >>
-      CIRCLECI_PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
-      CIRCLECI_PR_BASE_REF: << pipeline.event.github.pull_request.base.ref >>
+commands:
+  assert-live-pr-head:
     steps:
-      - checkout
       - run:
           name: Verify GitHub App pull request head
           command: |
             set -euo pipefail
-
             [[ "$CIRCLECI_TRIGGER_TYPE" == github_app ]] || {
               echo 'This workflow requires a native CircleCI GitHub App trigger' >&2
               exit 2
@@ -43,7 +31,6 @@ jobs:
               echo 'This check only validates pull requests targeting main' >&2
               exit 2
             }
-
             checkout_sha="$(git rev-parse HEAD)"
             [[ "$checkout_sha" == "$CIRCLECI_PIPELINE_GIT_REVISION" ]] || {
               printf 'Pipeline revision mismatch: pipeline=%s checkout=%s\n' \
@@ -55,7 +42,6 @@ jobs:
                 "$CIRCLECI_PR_HEAD_SHA" "$checkout_sha" >&2
               exit 2
             }
-
             live_head_sha="$(git ls-remote origin "refs/pull/${CIRCLECI_PR_NUMBER}/head" | cut -f1)"
             [[ "$live_head_sha" =~ ^[a-f0-9]{40}$ ]] || {
               echo 'Could not resolve the current GitHub pull request head' >&2
@@ -66,9 +52,50 @@ jobs:
                 "$CIRCLECI_PR_HEAD_SHA" "$live_head_sha" >&2
               exit 2
             }
-
             printf 'Verified PR #%s at exact head %s\n' \
               "$CIRCLECI_PR_NUMBER" "$CIRCLECI_PR_HEAD_SHA"
+
+  verify-policy-integrity:
+    steps:
+      - run:
+          name: Refuse pull request changes to security gate policy
+          command: |
+            set -euo pipefail
+            [[ "$CIRCLECI_PR_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+            [[ "$CIRCLECI_PR_BASE_SHA" != "$CIRCLECI_PR_HEAD_SHA" ]]
+            git fetch --no-tags origin "$CIRCLECI_PR_BASE_SHA"
+            git cat-file -e "$CIRCLECI_PR_BASE_SHA^{commit}"
+            policy_paths=(
+              scripts/skills/verify-skill-routing.sh
+              scripts/skills/verify-skill-security.sh
+              skills/cross-language-purity/scripts/verify-purity.sh
+              tests/test_harness_purity.py
+              ':(glob)**/.skillspector-baseline.yaml'
+            )
+            if ! git diff --quiet "$CIRCLECI_PR_BASE_SHA" "$CIRCLECI_PR_HEAD_SHA" -- "${policy_paths[@]}"; then
+              echo 'Security gate policy changed in the pull request; review and land policy separately before this PR can pass.' >&2
+              git diff --name-only "$CIRCLECI_PR_BASE_SHA" "$CIRCLECI_PR_HEAD_SHA" -- "${policy_paths[@]}" >&2
+              exit 2
+            fi
+            echo 'PR security gate policy matches trusted base.'
+
+jobs:
+  verify-native-pr-head:
+    docker:
+      - image: cimg/node:22.19.0
+    resource_class: small
+    environment:
+      CIRCLECI_TRIGGER_TYPE: << pipeline.trigger.type >>
+      CIRCLECI_CONFIG_REF: << pipeline.config.ref >>
+      CIRCLECI_PIPELINE_GIT_REVISION: << pipeline.git.revision >>
+      CIRCLECI_PR_NUMBER: << pipeline.event.github.pull_request.number >>
+      CIRCLECI_PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      CIRCLECI_PR_BASE_SHA: << pipeline.event.github.pull_request.base.sha >>
+      CIRCLECI_PR_BASE_REF: << pipeline.event.github.pull_request.base.ref >>
+    steps:
+      - checkout
+      - assert-live-pr-head
+      - verify-policy-integrity
 
   verify-native-pr-head-current:
     docker:
@@ -83,25 +110,7 @@ jobs:
       CIRCLECI_PR_BASE_REF: << pipeline.event.github.pull_request.base.ref >>
     steps:
       - checkout
-      - run:
-          name: Verify tested checkout is still the live pull request head
-          command: |
-            set -euo pipefail
-            [[ "$CIRCLECI_TRIGGER_TYPE" == github_app ]]
-            [[ "$CIRCLECI_CONFIG_REF" == refs/heads/main ]]
-            [[ "$CIRCLECI_PR_BASE_REF" == main ]]
-            [[ "$CIRCLECI_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-            [[ "$CIRCLECI_PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-            [[ "$CIRCLECI_PIPELINE_GIT_REVISION" == "$CIRCLECI_PR_HEAD_SHA" ]]
-            [[ "$(git rev-parse HEAD)" == "$CIRCLECI_PR_HEAD_SHA" ]]
-            live_head_sha="$(git ls-remote origin "refs/pull/${CIRCLECI_PR_NUMBER}/head" | cut -f1)"
-            [[ "$live_head_sha" == "$CIRCLECI_PR_HEAD_SHA" ]] || {
-              printf 'PR #%s moved during validation: tested=%s current=%s\n' \
-                "$CIRCLECI_PR_NUMBER" "$CIRCLECI_PR_HEAD_SHA" "$live_head_sha" >&2
-              exit 2
-            }
-            printf 'PR #%s is still at verified head %s\n' \
-              "$CIRCLECI_PR_NUMBER" "$CIRCLECI_PR_HEAD_SHA"
+      - assert-live-pr-head
 
   framework-pr-regression:
     docker:
@@ -128,6 +137,7 @@ jobs:
     resource_class: medium
     environment:
       CIRCLECI_PR_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+      PYTHONSAFEPATH: "1"
     steps:
       - checkout
       - run:
@@ -139,7 +149,7 @@ jobs:
             python3 -m venv /tmp/ci-venv
             echo 'export PATH=/tmp/ci-venv/bin:$PATH' >> "$BASH_ENV"
             source "$BASH_ENV"
-            python -m pip install --quiet pytest pytest-asyncio redis
+            python -m pip install --quiet 'pytest==9.1.1' 'pytest-asyncio==1.4.0' 'redis==8.1.0'
       - run:
           name: Verify skill routing policy
           command: ./scripts/skills/verify-skill-routing.sh --all
@@ -164,6 +174,16 @@ jobs:
       - run:
           name: Run Redis-dependent integration tests
           command: |
+            for attempt in {1..30}; do
+              if python -c 'import socket; socket.create_connection(("127.0.0.1", 6379), timeout=1).close()' 2>/dev/null; then
+                break
+              fi
+              if [[ "$attempt" -eq 30 ]]; then
+                echo 'Redis sidecar did not become ready within 30 attempts' >&2
+                exit 1
+              fi
+              sleep 1
+            done
             python -c 'import redis; assert redis.Redis(host="localhost", port=6379).ping()'
             PYTHONPATH=lib/agent-bus pytest -q lib/agent-bus/tests/test_client.py
       - run:
