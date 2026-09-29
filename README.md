@@ -24,6 +24,12 @@ rejects changes to the root `.gitleaksignore` because Gitleaks also reads that
 file from the scan source. Inline `gitleaks:allow` directives are disabled, and
 the scanner covers the PR commit range.
 
+Framework Node jobs use `cimg/node:24.15.0` to match the Node 24 LTS contract
+in agent-framework's package and Actions configuration. Both the Node regression
+job and Python audit job install pinned PyYAML for the skill metadata validator.
+The Node image needs `python3-venv` installed before creating its isolated test
+environment; neither PyYAML nor `ensurepip` is present in that image by default.
+
 No write token, self-hosted Actions runner, merge controller, or privileged
 remediation belongs in these untrusted-PR jobs. Confirm the CircleCI Checks
 GitHub App owns a real check run on the current PR head and that checkout used
