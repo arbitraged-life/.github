@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   dependency-review:
-    uses: NERV-es/.github/.github/workflows/dependency-review-reusable.yml@e8157bb0be3f3a0b843bcc0d30ce187d89d237db
+    uses: arbitraged-life/.github/.github/workflows/dependency-review-reusable.yml@e8157bb0be3f3a0b843bcc0d30ce187d89d237db
     secrets: inherit
