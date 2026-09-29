@@ -2,6 +2,8 @@
 
 `auto-merge-reusable.yml` calls `merge_gate.py` for one bounded scan. The Actions-only path is the default and requires exactly one successful named Actions workflow run for the PR's current head SHA. Advisory Actions workflows are reported as optional observations; they never substitute for or block a required workflow. The gate retains the configured opt-in label and merge method, requires GitHub to report `MERGEABLE`, re-reads the PR immediately before merge, and uses `gh pr merge --match-head-commit <sha>` as a server-side expected-head guard.
 
+The reusable job checks out its coordinator from `job.workflow_sha`, the exact commit defining the called workflow, rather than mutable `main`. Consumers must pin their `uses:` reference to an immutable commit for stable behavior. GitHub documents these `job.workflow_*` fields for reusable workflows on GitHub.com; they are unavailable on GitHub Enterprise Server. The label re-read is best-effort: GitHub's merge endpoint only provides an atomic head-SHA guard, not a label precondition. Keep the opt-in gate disabled unless that residual race is acceptable or enforcement is provided by independently verified branch protection.
+
 ## Inputs and decisions
 
 The reusable workflow inputs are:

@@ -5,20 +5,9 @@ name: Label Auto-Merge (reusable)
 # the exact required provider workflow set. Do not enable until the publisher
 # identity and live result bridge have been independently verified.
 #
-# Callers declare their own triggers (schedule + workflow_run on the gate +
-# pull_request labeled/synchronize/reopened + workflow_dispatch) and grant:
-# contents:write, pull-requests:write, checks:read, actions:read.
-#
-#   jobs:
-#     merge:
-#       permissions:
-#         contents: write
-#         pull-requests: write
-#         checks: read
-#         actions: read
-#       uses: arbitraged-life/.github/.github/workflows/auto-merge-reusable.yml@main
-#       with:
-#         gate-workflow: ci.yml
+# Callers pin this reusable workflow to a reviewed commit SHA, declare their
+# own triggers, and grant contents:write, pull-requests:write, checks:read,
+# and actions:read. The job checks out its script at the called workflow SHA.
 
 "on":
   workflow_call:
@@ -70,8 +59,8 @@ jobs:
       - name: Check out shared coordinator
         uses: actions/checkout@v4
         with:
-          repository: arbitraged-life/.github
-          ref: main
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .shared-github
           persist-credentials: false
       - name: Run one bounded merge-gate pass
