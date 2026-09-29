@@ -132,7 +132,7 @@ jobs:
 
   framework-pr-security-audit:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.12
       - image: redis:7.2-alpine
     resource_class: medium
     environment:
